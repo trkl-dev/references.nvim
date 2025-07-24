@@ -27,7 +27,7 @@ local function get_references_sync(bufnr, uri, position)
   return vim.lsp.buf_request_sync(bufnr, "textDocument/references", {
     textDocument = { uri = uri },
     position = position,
-    context = { includeDeclaration = false }
+    context = { includeDeclaration = false },
   }, 1000)
 end
 
@@ -89,7 +89,8 @@ local function find_enclosing_function(symbols, ref)
     if
         symbol.kind == SYMBOLKINDS.Function or
         symbol.kind == SYMBOLKINDS.Class or
-        symbol.kind == SYMBOLKINDS.Method
+        symbol.kind == SYMBOLKINDS.Method or
+        symbol.kind == SYMBOLKINDS.Variable
     then
       if line >= range.start.line and line <= range["end"].line then
         return symbol
@@ -104,6 +105,8 @@ end
 
 ---@type table<string, ReferenceNode>
 local nodes = {}
+
+local visited = {}
 
 -- The main recursive function
 ---@param bufnr     integer buffer number
@@ -175,16 +178,26 @@ local flat_nodes = {}
 ---@param indent nil|string
 ---@param root_processed nil|boolean
 local function print_tree(node, indent, root_processed)
+
+  -- Prevent cycles in the graph from crashing things
+  local k = func_key(node.func)
+  if visited[k] then
+    return
+  end
+  visited[k] = true
+
   indent = indent or ""
   root_processed = root_processed or false
 
   local reference_string = ""
 
+  local short_file = vim.fn.fnamemodify(vim.uri_to_fname(node.func.file), ":.")
+
   if not root_processed then
-    reference_string = node.func.func_name .. "(): " .. node.func.line
+    reference_string = string.format("%s():%d [%s]", node.func.func_name, node.func.line, short_file)
     root_processed = true
   else
-    reference_string = indent .. "└─" .. node.func.func_name .. "(): " .. node.func.line
+    reference_string = string.format(indent .. "└─ %s():%d [%s]", node.func.func_name, node.func.line, short_file)
   end
 
   ---@type TelescopeNode
@@ -209,9 +222,9 @@ function M.recursive_references()
   local pos = { line = position[1] - 1, character = position[2] }
   local uri = vim.uri_from_bufnr(bufnr)
 
-  -- QUES: Does this kind of thing run constantly? Such that this would grow constantly if not emptied?
   nodes = {}
   flat_nodes = {}
+  visited = {}
 
   -- TODO: This is probably a good place to handle stuff anyway
   local initial_references = get_references_sync(bufnr, uri, pos)
