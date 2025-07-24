@@ -60,6 +60,7 @@ local SYMBOLKINDS = {
   Operator = 25,
   TypeParameter = 26,
 }
+
 ---@alias Position {line: integer, character: integer}
 ---@alias LSPRange {start: Position, end: Position}
 ---@alias Symbol {name: string, detail: string?, kind: SymbolKind, range: LSPRange, selectionRange: LSPRange, children: table<integer, Symbol>?}
@@ -76,7 +77,7 @@ end
 
 ---@param symbols SymbolTable
 ---@param ref Location
----@return Symbol
+---@return Symbol?
 local function find_enclosing_function(symbols, ref)
   if ref.range == nil then
     print("range is nil: " .. dump(ref))
@@ -84,18 +85,18 @@ local function find_enclosing_function(symbols, ref)
   end
   local line = ref.range.start.line
   for _, symbol in ipairs(symbols) do
-    -- if symbol.kind == SYMBOLKINDS.Function or symbol.kind == SYMBOLKINDS.Class or symbol.kind == SYMBOLKINDS.Method then -- function or method
-    -- print("symbol: " .. dump(symbol))
     local range = symbol.range
-    -- print("line: " .. line .. " range: " .. dump(range))
-    if line >= range.start.line and line <= range["end"].line then
-      -- print("symbol found: " .. dump(symbol))
-      return symbol
+    if
+        symbol.kind == SYMBOLKINDS.Function or
+        symbol.kind == SYMBOLKINDS.Class or
+        symbol.kind == SYMBOLKINDS.Method
+    then
+      if line >= range.start.line and line <= range["end"].line then
+        return symbol
+      end
     end
-    -- end
   end
-  print("Unable to find symbol for ref: " .. dump(ref))
-  return {}
+  return nil
 end
 
 ---@alias Func {file: string, func_name: string, line: integer}
@@ -119,37 +120,33 @@ local function get_references(bufnr, uri, position, parent_node)
 
   for _, outer_reference in pairs(reference_locations) do
     if outer_reference.error ~= nil then
-      print("error: " .. dump(outer_reference.error))
-      goto outer_continue
+      -- Can occur if calling for references on constants, or other random things
+      return
     end
 
     -- FIX: remove the 'or {}'?
     for _, reference in ipairs(outer_reference.result or {}) do
       local outer_symbols = get_document_symbols_sync(bufnr, reference.uri)
       if outer_symbols == nil then
-        print("outer symbols nil")
-        goto reference_continue
+        error("outer symbols nil")
       end
 
       for _, symbols in ipairs(outer_symbols) do
         if symbols.error ~= nil then
-          print("error: " .. dump(symbols.error))
+          error("error: " .. dump(symbols.error))
         end
 
         local enclosing_function = find_enclosing_function(symbols.result, reference)
         if enclosing_function == nil then
-          print("enc func nil")
           goto continue
         end
 
-        -- print("enc func: " .. dump(enclosing_function))
         local func = {
           file = reference.uri,
           func_name = enclosing_function.name,
           line = reference.range.start.line + 1
         }
 
-        -- print("func: " .. dump(func))
         local node = nodes[func_key(func)]
         if not node then
           ---@type ReferenceNode
@@ -165,10 +162,8 @@ local function get_references(bufnr, uri, position, parent_node)
         get_references(bufnr, reference.uri, enclosing_function.selectionRange.start, node)
         ::continue::
       end
-      ::reference_continue::
     end
   end
-  ::outer_continue::
 end
 
 ---@alias TelescopeNode {file: string, func_name: string, line: integer, col: integer, display_name: string, ordinal: string}
@@ -186,12 +181,12 @@ local function print_tree(node, indent, root_processed)
   local reference_string = ""
 
   if not root_processed then
-    reference_string = node.func.func_name .. "(): " .. node.func.file .. ":" .. node.func.line
+    reference_string = node.func.func_name .. "(): " .. node.func.line
     root_processed = true
   else
-    reference_string = indent .. "└─" .. node.func.func_name .. "(): " .. node.func.file .. ":" .. node.func.line
+    reference_string = indent .. "└─" .. node.func.func_name .. "(): " .. node.func.line
   end
-  -- print(reference_string)
+
   ---@type TelescopeNode
   local new_node = {
     file = node.func.file,
@@ -224,18 +219,6 @@ function M.recursive_references()
     print("initial references nil")
     return
   end
-
-  -- for _, outer_reference in pairs(initial_references) do
-  --   if outer_reference.error ~= nil then
-  --     print("error: " .. dump(outer_reference.error))
-  --     return
-  --   end
-  --
-  --   for _, reference in ipairs(outer_reference.result) do
-  --     print(reference.range.
-  --   end
-  --
-  -- end
 
   local symbols = get_document_symbols_sync(bufnr, uri)
   if symbols == nil then
@@ -311,7 +294,6 @@ function M.recursive_references()
       results = flat_nodes,
       ---@param entry TelescopeNode
       entry_maker = function(entry)
-        print(entry.file)
         return {
           value = entry,
           display = entry.display_name,
